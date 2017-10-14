@@ -1,6 +1,6 @@
 # BIP-model-for-RESTful-Shopping-Cart-
 
-A BIP model developed for the needs of an academic publication titled "Correct by Construction Web Service Architecture" (link: http://ieeexplore.ieee.org/abstract/document/6825962/?reload=true), in collaboration with the DSG group of the Department of Informatics, Aristotle University of Thessaloniki.
+A BIP model developed for the needs of an academic publication titled "Correct by Construction Web Service Architecture" (link: http://depend.csd.auth.gr/publications.php), in collaboration with the DSG group of the Department of Informatics, Aristotle University of Thessaloniki.
 
 In order to compile an executable for the BIP model from BIP source code, you must fullfil the following prerequisites: 
 
