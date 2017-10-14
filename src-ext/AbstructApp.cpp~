@@ -1,0 +1,11 @@
+#include <iostream>
+
+int main (){
+string url;
+
+cout<<"enter url in the form of controller/action/id";
+cin>>url;
+
+
+
+}

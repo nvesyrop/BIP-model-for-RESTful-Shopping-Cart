@@ -1,0 +1,899 @@
+@cpp(src="src-ext/HelloPackageStruct.cpp", include="HelloPackageStru.hpp")
+//@cpp(include="iostream,string")
+package global_rest
+
+extern data type string
+extern data type bool
+extern data type Queue
+extern data type MsgQueue
+extern data type ConnQueue
+extern data type ConnStar
+extern data type StringQueue
+extern data type StringStar
+extern data type DataQueue
+extern data type DataStar
+
+port type aPort()
+port type dataPort(string cacheAction, string url, string item, int eTag)
+port type endpointRwPort(string address, int connection, string createTime, string msg)
+port type endpointPort(string address, int connection, string createTime)
+port type endpointRuntimePort(string actionReq, int binding, string addressTo, int runtime, StringQueue parameters, StringQueue sessionData, int error)
+
+
+/******************* DISPTCH - START **********************/
+
+port type disptchAcceptPort(string address, int binding, string partnerLink, int connection, string createTime)
+port type disptchRuntimePort(string actionReq, int runtime, int conversation, string msg)
+port type disptchReportPort(string actionReq, int runtime, int conversation)
+port type cachePort(string cacheAction, string url, string cached, int eTag )
+
+atom type Disptch(int addrId, int Id)
+
+	///********** data ***************/
+        data StringQueue parametersIn, dataOut, sessionIn, sessionOut
+	data string address, inputMsg, outputMsg, cached, cacheurl,url,action, path, protocol, actionPath
+	data string partnerLink, actionReq, createTime
+	data int binding, roundtrip, cachable, runtime, error, connection, id, keepAlive, aknow, conversation, time, timeout,foundGet,eTag
+	data string cacheAction
+        ///********** ports ***************/
+	port aPort contin()
+	port aPort errorOccured()
+	port aPort timeout()
+	port aPort handlReq()
+	port aPort handlResp()
+	
+	//port aPort matchAct()
+        port aPort found()
+	port aPort not_found()
+	port aPort prepReqCache()
+
+	///********** exported ports ***************/
+	export port disptchAcceptPort init(address, binding, partnerLink, connection,createTime)
+
+	export port endpointRwPort rcvReq(address, connection, createTime, inputMsg)
+	export port endpointRwPort sndResp(address, connection, createTime, outputMsg)
+	 export port endpointRuntimePort delivReq(action, binding, address, runtime, parametersIn, sessionIn, error)
+	 export port endpointRuntimePort prepResp(actionReq, binding, address, runtime, dataOut, sessionOut, error)
+
+	export port cachePort reqCache(cacheAction, cacheurl, cached, eTag)
+	export port cachePort respCache(cacheAction, cacheurl, cached, eTag)
+	//export port cachePort updateCache(cacheAction, cached)
+	export port aPort tick()	
+	export port endpointPort closeConnection(address, connection, createTime)
+	
+	///********** place ***************/
+	place INIT, PARSE2, PARSE, REQCACHE, UPDTCACHE, DELIV, RESPCACHE, HANDL1,  HANDL, WAIT, PREPRESP, PREP,  DONE, RESPCACHE2
+
+	///********** transitions ***************/
+	initial to INIT do{ id=Id; 
+		address="185.209.133.230"; 
+		 //action or controller (TODO)
+		timeout=1; 	
+		runtime=-1; 
+		connection=-1;  inputMsg=""; outputMsg="";  //keepAlive=0; 
+                action=""; path=""; protocol=""; actionPath="";
+                 binding=2;
+	 	//contoller="";action="";resourceId="";actionID="";resourceParameters,actionIDParam              
+		
+	}
+	on init from INIT to WAIT do{ inputMsg=""; error=0; action=""; outputMsg=""; time=0; error=0; clearQueue(dataOut); clearQueue(sessionOut); clearQueue(parametersIn);  clearQueue(sessionIn); }
+	on rcvReq from WAIT to PARSE provided(time<timeout) do { url=inputMsg; 
+		time=0; roundtrip=1;  } 
+        on tick from WAIT to WAIT provided(time<timeout) do { time=time+1;}
+        on timeout from WAIT to DONE provided(time>=timeout) do{ time=0; }
+	
+	on handlReq from PARSE to HANDL1 do{ 
+		/*deserialize(parametersIn,inputMsg);*/
+                error=0;
+                splitUrl(url, action, path, protocol, eTag);
+		if(const_compareStrings(action,"POST")==0) then splitPath(path, parametersIn); fi
+		joinStrings(action,path,actionPath);
+		
+	}
+	
+	on errorOccured from HANDL1  to UPDTCACHE 
+		provided(error!=0 && roundtrip!=0) do{}
+	on errorOccured from HANDL1  to UPDTCACHE provided(error!=0 && roundtrip==0) do{}
+ 
+	on prepReqCache from  HANDL1 to PARSE2 provided(error==0 &&  compareStrings(action,"GET")==0) do{ 
+		cacheAction="GET";	cacheurl="GET "; cacheurl=appendToString(cacheurl,path); cached=""; }
+	on reqCache from  PARSE2 to REQCACHE
+	on respCache from REQCACHE to RESPCACHE
+	on not_found from RESPCACHE to PREP 
+		provided(compareStrings(cached,"-1")==0) do{  
+			//parametersIn
+	}
+	on found from RESPCACHE to RESPCACHE2 
+		provided(compareStrings(cached,"-1")!=0)do{ add(stringStar(cached),dataOut);  }
+
+	on contin from  HANDL1 to PREP provided(error==0 && (compareStrings(action,"GET")!=0)) do{
+	/*deserialize    (parametersIn,inputMsg);*/  actionReq=action;  }
+	on delivReq from PREP to DELIV do{}
+	
+	on contin from DELIV to INIT provided(roundtrip==0)do{  time=0; connection=-1;  }
+	on prepResp from DELIV to PREPRESP provided(roundtrip!=0) do{ 
+		cacheAction="PUT"; cached=outputMsg; }
+	on reqCache from PREPRESP to UPDTCACHE
+	on respCache from UPDTCACHE to RESPCACHE2
+
+	on handlResp from RESPCACHE2 to HANDL provided(roundtrip==1) do{ add(stringStar(int2string(eTag)),dataOut);   outputMsg=serialize(outputMsg,dataOut);}
+	on contin from RESPCACHE2 to DONE provided(roundtrip==0)
+	on sndResp from HANDL to INIT provided(time<timeout) do {  time=0; connection=-1; }
+	on tick from HANDL to HANDL provided(time<timeout) do{ time=time+1;}
+	on timeout from HANDL to INIT provided(time>=timeout) do{ time=0; connection=-1; }
+
+end
+
+connector type disptchDelivReqConn(disptchRuntimePort P)
+define P
+end
+
+connector type disptchPrepRespConn(disptchRuntimePort P)
+define P
+end
+
+connector type disptchReportConn(disptchReportPort P)
+define P
+end
+
+
+/******************* DISPTCH - END **********************/
+
+
+
+/******************* listnr_CTRL ******* START ***************/
+
+port type listnrConnPort(ConnQueue connQueue, StringQueue addrQueue, int maxSize, int allMaxSize)
+port type listnrQueuePort(ConnQueue connQueue)
+
+atom type Listnr(int Id)
+	///********** data ***************/
+	data StringQueue addrQueue
+	data ConnQueue connQueueIn
+	data int id, maxSize, allMaxSize, time, next, checkInterval, timeout
+	data StringStar address
+	///********** exported ports ***************/
+	export port listnrConnPort accept(connQueueIn, addrQueue, maxSize, allMaxSize) 
+	export port listnrConnPort reject(connQueueIn, addrQueue, maxSize, allMaxSize)
+	export port listnrQueuePort disptch(connQueueIn)
+	/********** place ***************/
+	place INIT
+	///********** transitions ***************/
+	initial to INIT do { 
+            id=Id; 
+            address=stringStar("185.209.133.230"); add(address, addrQueue); //CONSTANT: addresses of dispatchers
+	    maxSize=5; // maximum size of connections in queue per address
+	    allMaxSize=10; // maximum size of all connections in queue
+	}
+	
+	on accept from INIT to INIT provided(size(addrQueue)>0) do{  /* accept new connection on some address */ }
+	on reject from INIT to INIT provided(size(addrQueue)>0) do{  /* reject new connection on some address due to overload */ }
+	on disptch from INIT to INIT do { //printQQueue(connQueueIn); 
+}
+	
+end
+/******************* listnr_CTRL ******* END ***************/
+
+
+/******************* ACTION_CONTROLLER - START **********************/
+port type sndQryDataPort(string query) 
+port type getRsltDataPort(DataQueue result)
+
+port type taskInReqPort(string actionReq, int runtime, StringQueue parameters, StringQueue sessionData) // parameter formats differ: one XML in SOAP, nothing in REST
+port type taskOutRespPort(int runtime, StringQueue parameters, StringQueue sessionData, int error) 
+port type taskOutReqPort(string actionReq, int binding, string addressTo, int runtime, StringQueue parameters, StringQueue sessionData) 
+port type taskInRespPort(int runtime, StringQueue parameters, StringQueue sessionData, int error) 
+
+
+
+/******************* ACTION_CONTROLLER - Client **********************/
+atom type task_c(int Id) // lives for only one call (alternatives: lives for session, lives for ever)
+
+	data int id, runtimeId, error, c, binding
+	data string actionReq, addressTo, itemId, cartId,param
+	data StringQueue sessionData, dataRespIn, parametersReqOut
+
+	export port taskInRespPort inResp(runtimeId, dataRespIn, sessionData, error)
+	export port taskOutReqPort outReq(actionReq, binding, addressTo,runtimeId, parametersReqOut, sessionData)
+	port aPort execute(),contin(), stop(), select()
+
+	place INIT, LIVE, EXEC, EXEC2, SND, RCV, SND2, RCV2, STOP, SND3, RCV3
+
+	initial to INIT do{ id=Id; cartId=int2string(id) ; }
+	on execute from INIT to EXEC do{ actionReq="GET"; add(stringStar("GET data/items HTTP1.1"),parametersReqOut);  binding=2;
+	}
+	on outReq from EXEC to SND do{ clearQueue(dataRespIn);}
+	on inResp from SND to RCV do{  }
+	on outReq from RCV to SND2 do{ clearQueue(dataRespIn);}
+	on inResp from SND2 to RCV2 do{  }
+	on select from RCV2 to EXEC2 provided(error==0 && size(dataRespIn)>0)do{
+		clearQueue(parametersReqOut);
+		actionReq="POST";
+		itemId = getQueue(dataRespIn,0); add(stringStar(itemId),parametersReqOut); 
+		param = "POST cart/"; param = appendToString(param, cartId); param = appendToString(param, "/"); param = appendToString(param, itemId);
+		param = appendToString(param,"  HTTP1.1");
+		add(stringStar(param),parametersReqOut);  binding=2;
+	}
+	on contin from RCV2 to STOP provided(error==0 && size(dataRespIn)==0)do{ my_print("\n there are no available Items"); }
+	on contin from RCV2 to STOP provided(error!=0) do{ my_print("\n error occurred ",int2string(error)); }
+	on outReq from EXEC2 to SND3 do{clearQueue(dataRespIn);}
+	on inResp from SND3 to RCV3 do{}
+	on contin from RCV3 to STOP provided(error==0)
+	on contin from RCV3 to STOP provided(error!=0)do{ my_print("\n error occurred ",int2string(error)); }
+	on stop from STOP to STOP 
+end
+
+
+/******************* ACTION_CONTROLLER - Server **********************/
+atom type task_s_get_items(int Id) // lives for only one call (alternatives: lives for session, lives for ever)
+
+	data DataQueue result
+	data int runtimeId, error //,conversation
+	data string actionReqIn, query
+	data StringQueue parametersReqIn, sessionData, dataRespOut
+
+	export port taskInReqPort inReq(actionReqIn,runtimeId, parametersReqIn, sessionData)
+	export port taskOutRespPort outResp(runtimeId, dataRespOut, sessionData, error)
+	export port sndQryDataPort sndQry(query)
+	export port getRsltDataPort getRslt(result)
+	port aPort execute()
+	port aPort init()
+
+	place INIT, LIVE, EXEC, CALLRESOURCE, RESPRESOURCE, DLVR
+
+	initial to INIT do{ actionReqIn="GET"; }
+	on inReq from INIT to LIVE do{ }
+	on execute from LIVE to EXEC do{ 
+		query="select availItems"; }
+	on sndQry from EXEC to CALLRESOURCE
+	on getRslt from CALLRESOURCE to RESPRESOURCE do{ query=""; result2Items(result,dataRespOut); clearQueue(result); }
+	on outResp from RESPRESOURCE to DLVR
+	on init from DLVR to INIT do{ clearQueue(dataRespOut); clearQueue(parametersReqIn); clearQueue(sessionData); }
+end
+
+atom type task_s_post_cart(int Id) // lives for only one call (alternatives: lives for session, lives for ever)
+
+	data DataQueue result
+	data string cartId, itemId
+	data int runtimeId, error, res_num //,conversation
+	data string actionReqIn,query
+	data StringQueue parametersReqIn, sessionData, dataRespOut
+
+	export port taskInReqPort inReq(actionReqIn,runtimeId, parametersReqIn, sessionData)
+	export port taskOutRespPort outResp(runtimeId, dataRespOut, sessionData, error)
+	export port sndQryDataPort sndQry(query)
+	export port getRsltDataPort getRslt(result)
+	port aPort execute()
+	port aPort init(), contin()
+
+	place INIT, LIVE, EXEC, CALLRESOURCE, RESPRESOURCE,CALLRESOURCE2, RESPRESOURCE2, DLVR,RESPRESOURCE1
+
+	initial to INIT do{ actionReqIn="POST"; }
+	on inReq from INIT to LIVE do{  cartId=getQueue(parametersReqIn,0); itemId=getQueue(parametersReqIn,1); }
+	on execute from LIVE to EXEC do{ query="remove availItems ";query=appendToString(query,itemId); }
+	on sndQry from EXEC to CALLRESOURCE
+	on getRslt from CALLRESOURCE to RESPRESOURCE do{ res_num = getId(getQueuePtr(result,0)); }
+	on contin from RESPRESOURCE to DLVR provided(res_num==0)do { error=300; // the item is not offered
+	}
+	on execute from RESPRESOURCE to RESPRESOURCE1 provided(res_num>0)do { 
+		query="insert cartItems ";query=appendToString(query,cartId); query=appendToString(query," "); query=appendToString(query,itemId);
+	}
+	on sndQry from RESPRESOURCE to CALLRESOURCE2
+	on getRslt from CALLRESOURCE2 to RESPRESOURCE2
+	on outResp from RESPRESOURCE2 to DLVR 
+	on init from DLVR to INIT do{ clearQueue(dataRespOut); clearQueue(parametersReqIn); }
+end
+
+atom type task_s_get_from_cache(int Id) // lives for only one call (alternatives: lives for session, lives for ever)
+
+	data DataQueue result
+	data int runtimeId, error //,conversation
+	data string actionReqIn, query
+	data StringQueue parametersReqIn, sessionData, dataRespOut
+
+	export port taskInReqPort inReq(actionReqIn,runtimeId, parametersReqIn, sessionData)
+	export port taskOutRespPort outResp(runtimeId, dataRespOut, sessionData, error)
+	export port sndQryDataPort sndQry(query)
+	export port getRsltDataPort getRslt(result)
+	port aPort execute()
+	port aPort init()
+
+	place INIT, LIVE, EXEC, CALLRESOURCE, RESPRESOURCE, DLVR
+
+	initial to INIT do{ actionReqIn="GET"; }
+	on inReq from INIT to LIVE do{ }
+	on execute from LIVE to EXEC do{ 
+		query="select availItems"; }
+	on sndQry from EXEC to CALLRESOURCE
+	on getRslt from CALLRESOURCE to RESPRESOURCE do{ query=""; result2Items(result,dataRespOut); clearQueue(result); }
+	on outResp from RESPRESOURCE to DLVR
+	on init from DLVR to INIT do{ clearQueue(dataRespOut); clearQueue(parametersReqIn); clearQueue(sessionData); }
+end
+
+
+/******************* ACTION_CONTROLLER - END **********************/
+
+/* non session alternative: DS req to ST */
+connector type taskInReqConn(endpointRuntimePort P, taskInReqPort R)
+define P R
+on P R
+provided(compareStrings(P.actionReq,R.actionReq)==0)
+down{ 
+	P.runtime=R.runtime;	
+	copyParameters(P.parameters, R.parameters);
+	copyParameters(P.sessionData, R.sessionData);
+}
+end
+
+/* ST resp to DS */
+connector type taskOutRespConn(taskOutRespPort P, endpointRuntimePort R)
+data ConnStar conn
+define P R
+on P R
+provided(P.runtime==R.runtime) // the rule for dispatching/routing to service_tasks (in BPEL also needs correlations)
+down{ 
+	copyParameters(P.parameters, R.parameters);
+	copyParameters(P.sessionData, R.sessionData);
+	R.error = P.error;
+}
+end
+
+/* ST req to IE */
+connector type taskOutReqConn(taskOutReqPort P, endpointRuntimePort R)
+define P R
+on P R
+provided(/*compareStrings(P.actionReq,R.actionReq)==0 &&*/ P.binding==R.binding) //  IE serves only one binding
+down{ 
+	R.runtime=P.runtime;	
+	R.actionReq=P.actionReq;	
+	R.addressTo=P.addressTo;	
+	copyParameters(P.parameters, R.parameters);
+	copyParameters(P.sessionData, R.sessionData);
+}
+end
+
+/* IE resp to ST */
+connector type taskInRespConn(endpointRuntimePort P, taskInRespPort R)
+define P R
+on P R
+provided(check(P.runtime,R.runtime)) // the rule for dispatching/routing to service_tasks (in BPEL also needs correlations)
+down{ 
+	copyParameters(P.parameters, R.parameters);
+	copyParameters(P.sessionData, R.sessionData);
+	R.error = P.error;
+}
+end
+
+
+/******************* INVCENDPT - START **********************/
+
+/** ports **/
+port type invcEndptRuntimePort(string actionReq, int runtime, string msg)
+port type invcEndptConnectPort(string addressFrom, string addressTo, int connection, string createTime)
+port type invcEndptReportPort(int runtime, int conversation, int code)
+
+/** atom **/
+atom type InvcEndpt(int Id)
+
+	///********** data ***************/
+	data int id, roundtrip, connection, runtime, conversation, error, time, timeout, keepAlive, altern, aknow, retry
+	data string addressTo, address, inputMsg, outputMsg, actionReq, ack, createTime, cacheAction, cached, cacheurl, path
+	data StringQueue parametersIn, parametersOut, sessionIn, sessionOut
+	data int reliable, binding, eTag, eTagOK
+
+	///********** ports ***************/
+        port aPort errorOccurred()
+        port aPort handlReq()
+        port aPort timeout()
+	port aPort contin(), init()
+        port aPort handlResp(), prepReqCache()
+	///********** exported ports ***************/
+	export port aPort tick()
+
+	export port endpointRuntimePort delivResp(actionReq, binding, addressTo, runtime, parametersIn, sessionIn, error)
+	export port endpointRuntimePort prepReq(actionReq, binding,  addressTo, runtime, parametersOut, sessionOut, error)
+	export port invcEndptConnectPort connect(address, addressTo, connection, createTime)	
+	
+	export port cachePort reqCache(cacheAction, cacheurl, cached, eTag)
+	export port cachePort respCache(cacheAction, cacheurl, cached, eTag)
+		
+	export port endpointPort connectionAccepted(address, connection,createTime)
+	export port endpointPort connectionRefused(address, connection,createTime)
+	export port endpointPort closeConnection(address, connection,createTime)
+	export port endpointRwPort sndReq(address, connection,createTime, outputMsg)
+	export port endpointRwPort rcvResp(address, connection,createTime, inputMsg)
+
+	 //error codes: 1)parseError, 2)connectionRefused
+	/********** place ***************/
+	place A,W,E,R,T,Y,U,I,O,P,L,K,J,H,G,F,D,S,Q,Z,X,C,V,B,N,M, HANDL1, PARSE2, REQCACHE, HANDL2, REQCACHE1, PARSE3
+
+	///********** transitions ***************/
+	initial to A do { 
+		address="185.209.133.000"; id=Id; binding=2; // CONSTANTS
+		 inputMsg=""; outputMsg=""; addressTo=""; error=0; timeout=1; createTime=""; connection=0;}		
+	/* receives a request to prepare (from Runtime) */
+	on prepReq from A to HANDL1 do {  addressTo="185.209.133.230"; }
+	on contin from HANDL1 to B provided(compareStrings(actionReq,"GET")!=0)
+
+	on prepReqCache from  HANDL1 to PARSE2 provided(compareStrings(actionReq,"GET")==0) do{ 
+		findPathInParams(parametersOut,path);
+	        cacheAction="GET"; cacheurl="GET "; cacheurl=appendToString(cacheurl,path); cached=""; }
+
+	on reqCache from  PARSE2 to REQCACHE
+	on respCache from REQCACHE to B do{ add(stringStar(int2string(eTag)), parametersOut); }
+ 	
+	on handlReq from B to C do { roundtrip=1; outputMsg="";  outputMsg=serialize(outputMsg,parametersOut);  } 
+	on errorOccurred from C to I provided(error!=0) do {error=1;}  
+	on connect from  C to D provided(error==0) do { }
+	
+	on connectionAccepted from D to F do{ } 
+	on connectionRefused from D to I do{ error=2; } 
+	
+	on sndReq from F to G do{ }/* write (i.e. send) to connection */
+	on rcvResp from G to H provided(roundtrip==1 && time<timeout) do {  time=0; }// response is received 
+	on tick from G to G provided(roundtrip==1 && time<timeout) do{ time=time+1; }
+	on timeout from G to E provided(roundtrip==1 && time>=timeout) do{ time=0; error=3; }
+	on contin from G to N provided(roundtrip==0) do {} // skip receiving a response
+	
+	on handlResp from H to HANDL2 provided(error==0) do {parametersIn=deserialize(parametersIn,inputMsg);
+		if(const_compareStrings(getQueue(parametersIn,0),"304")==0) then eTagOK=1; clearQueue(parametersIn); add(cached, parametersIn);
+		else eTagOK=0; eTag = string2int(getQueue(parametersIn,const_size(parametersIn)-1)); remove(parametersIn,const_size(parametersIn)-1); fi	
+	}
+	on errorOccurred from H to E provided(error!=0) do { error=1; } /* TODO: addErrorToMsg */
+	
+	on prepReqCache from  HANDL2 to PARSE3 provided(eTagOK==0 &&  compareStrings(actionReq,"GET")==0) do{ 
+		cacheAction="PUT";  cached=inputMsg;     }
+	on reqCache from  PARSE3 to REQCACHE1
+	on respCache from REQCACHE1 to E
+	
+	on contin from  HANDL2 to E provided(eTagOK==1 || compareStrings(actionReq,"GET")!=0) 
+
+	on delivResp from E to N do{ }
+	on closeConnection from N to S do{  }
+	on init from S to A do{  inputMsg=""; outputMsg=""; addressTo=""; error=0; createTime=""; connection=0;}
+	
+end
+
+/******************* INVCENDPT - END **********************/
+
+
+
+/*************** Resource **************************/
+
+
+/*definition of atomic type: Resource*/
+
+port type queryDataPort(string query)
+port type resultDataPort(DataQueue result)
+
+connector type queryDataConn(sndQryDataPort C, queryDataPort D)
+define D C
+on D C
+down{ D.query=C.query; }
+end
+
+connector type resultDataConn(resultDataPort D, getRsltDataPort C)
+define D C
+on D C
+down{ C.result=makeDataCopy(D.result); }
+end
+
+
+atom type DataResource()
+
+	///********** ports ***************/
+	//data int err
+	data string query, cacheAction
+        data DataQueue availItems, cartItems, result
+
+        port aPort found()
+        port aPort not_found()
+        port aPort inval_meth()
+
+        port aPort read_query()
+        port aPort create_query()
+        port aPort update_query()
+        port aPort delete_query()
+
+	///********** exported ports ***************/
+	export port queryDataPort query(query)
+	export port resultDataPort result(result)	
+
+	///********** places ***************/
+	place S0, S1, S2, S3
+
+	///********** transitions ***************/
+	
+	initial to S0 do{ add(connStar("","",1), availItems); add(connStar("","",2), availItems); add(connStar("","",3), availItems); }
+	on query from S0 to S1 do{ result = executeDataQueryCartItems3(query, availItems, cartItems); }
+        //on select_query from S1 to S2 provided(compareStrings(cacheAction,"select")==0) do{ getFromResource(resourceItems,url,result,exists); }
+        //on insert_query from S1 to S2 provided(compareStrings(cacheAction,"insert")==0) do{ addToResource(resourceItems,resourceParameters,url,result); }
+        //on update_query from S1 to S2 provided(compareStrings(cacheAction,"update")==0) do{ updateResource(resourceItems,resourceParameters,url,result); }
+        //on delete_query from S1 to S2 provided(compareStrings(cacheAction,"delete")==0) do{ deleteResource(resourceItems,resourceParameters,url,result); }
+	//on inval_meth from S1 to S3 provided((compareStrings(cacheAction,"select")*compareStrings(cacheAction,"insert")*compareStrings(cacheAction,"update")*compareStrings(cacheAction,"delete")!=0) do{err=405;}	
+	//on not_found from S2 to S3 provided(exists==0) do{err=404;}
+        //on found from S2 to S3 provided(exists!=0) do{ exists=1; }
+        on result from S1 to S0 do{ clearQueue(result); }
+  	
+end
+
+/*************** Cache **************************/
+
+
+/*definition of atomic type: Cache*/
+
+atom type Cache(int Id)
+
+	///********** ports ***************/
+	data ConnQueue cachedItems
+	data string cacheAction,item, url,action, path
+	data int exists, eTag, eTagOK
+
+        port aPort found(), not_found(), eTag_expired()
+	port aPort read_query(), update_query()
+	
+	///********** exported ports ***************/	
+        export port dataPort get_query(cacheAction, url, item, eTag)  
+	export port dataPort snd_resp(cacheAction, url, item, eTag)
+
+	///********** places ***************/
+	place S0, S1, S2, S3, S4
+
+	///********** transitions ***************/
+	initial to S0
+	on get_query from S0 to S1 do{ splittoken(cacheAction,action,path); }
+	on update_query from S1 to S3 provided(compareStrings(action,"PUT")==0) do{ updateCache(cachedItems, url, item, eTag); }
+	on read_query from S1 to S4 provided(compareStrings(action,"GET")==0) do{ getFromCache(cachedItems,url,item, eTag, exists, eTagOK);  }
+	on found from S4 to S3 provided(exists==1 && eTagOK==1)  do{ item="0";  }
+	on not_found from S4 to S3   provided(exists!=1)  do{ item="-1"; }
+	on eTag_expired from S4 to S3 provided(exists==1 && eTagOK!=1)  do{ item="-1"; }
+	on snd_resp from S3 to S0 	 
+
+end
+
+
+
+/********** HTTPnetwork - START *************/////////////////////////
+
+port type HTTPInitConnectionPort(ConnQueue connQueue, int maxId) 
+port type HTTPReachPort(ConnStar conn) 
+port type HTTPPort(ConnQueue connQueue)
+
+atom type HTTPnetwork(int capacity)
+
+ data ConnStar conn
+ data ConnQueue connQueue
+ data string address1, address2, msg
+ data int maxSize, connection // 1:srvrPending, 2:srvrAccept, 3:srvrRefu, 4:active, 7:closed
+
+// /* queue of connections */
+
+export port HTTPInitConnectionPort initConnection(connQueue, maxSize) 
+ port aPort hasPending()
+ export port HTTPReachPort reachServer(conn)
+ export port HTTPReachPort noServer(conn)
+export port HTTPPort httpEvent(connQueue)
+
+ place INIT, PEND
+ 
+ initial to INIT do{ conn=connStar(); maxSize = capacity;}
+ on initConnection from INIT to INIT provided(size(connQueue)<maxSize) 
+ on hasPending from INIT to PEND provided(hasStatus(connQueue, 1)) do{
+       conn=getFirstStatus(connQueue, 1);
+	}
+ on reachServer from PEND to INIT /* removed from pending, add to connections*/   
+on noServer from PEND to INIT
+on httpEvent from INIT to INIT do{ 
+//printQQueue(connQueue); 
+}
+
+end
+/*************************** HTTPNetwork ******** END ******************/
+
+// /*************************** HTTPNetwork - InvkEndpt **************************/
+ connector type HTTPRequestServerConn(invcEndptConnectPort S, HTTPInitConnectionPort R)
+	 data ConnStar conn
+	 define R S
+	 on R S
+	 down { S.connection = getNextId(R.connQueue,R.maxId); 
+		S.createTime=getTime();
+		conn=connStar(S.addressFrom, S.addressTo, S.connection, 1, S.createTime);
+                add(conn, R.connQueue);
+	  }
+ end
+
+/*************************** HTTPNetwork - listnrCtrl 
+
+/*********************************************************/
+ connector type HTTPReachConn(HTTPReachPort S, listnrConnPort R1)
+	data ConnStar conn
+ 	define S R1
+	 on S R1
+	 provided( isConnTarget(S.conn, R1.addrQueue) && ConnStringQueueSize(S.conn, R1.connQueue)<R1.maxSize && size(R1.connQueue)<R1.allMaxSize )
+	 down {  conn=makeConnCopy(S.conn); 
+		add(conn, R1.connQueue);
+		setConnStatus(S.conn,2);
+         }
+end
+
+ connector type HTTPNoReachConn(HTTPReachPort S)
+	define S
+	 on S
+	 down { 
+		setConnStatus(S.conn,3);
+         }
+end
+
+ connector type HTTPRejectConn(HTTPReachPort S, listnrConnPort R1)
+	define S R1
+	on S R1
+	 provided(isConnTarget(S.conn, R1.addrQueue) && (ConnStringQueueSize(S.conn, R1.connQueue)>=R1.maxSize || size(R1.connQueue)>=R1.allMaxSize))
+	 down {  setConnStatus(S.conn,3); }
+end
+// /*************************** Dispatch - listnrCtrl **************************/
+
+ connector type disptchAcceptConn(listnrQueuePort S, disptchAcceptPort R)
+	data ConnStar conn
+	 define R S
+	 on R S
+	 provided (hasConnAddress(S.connQueue,R.address))
+	 down { conn=removeFirstConnToAddress(S.connQueue,R.address); R.connection=getId(conn); R.createTime=getCreateTime(conn);}
+ end
+
+// /*************************** HTTPNetwork - Dispatch **************************/
+ connector type HTTPcloseConn(endpointPort S,  HTTPPort R)
+	data ConnStar conn
+	 define R S
+	 on R S
+	 provided (hasConnStatus(R.connQueue,S.connection,-1, S.createTime))
+	 down { removeFirstConn(R.connQueue,S.connection,-1, S.createTime);  }
+ end
+// /*************************** HTTPNetwork - InvkEndpt+Dispatch **************************/
+
+ connector type HTTPwriteConn(endpointRwPort S,  HTTPPort R)
+	 data ConnStar conn
+	 define R S
+	 on R S
+	 provided (hasConnStatus(R.connQueue,S.connection,4,S.createTime))
+	 down { 	conn=getFirstConnStatus(R.connQueue,S.connection,4,S.createTime); 
+			addMsgConn(conn,S.address, S.msg); 
+	 }
+ end
+
+ connector type HTTPreadConn(HTTPPort R, endpointRwPort S)
+	 data ConnStar conn
+	 define R S
+	 on R S
+	 provided (hasToRead(R.connQueue,S.address,S.connection,S.createTime))
+	 down {		 conn=getFirstConnStatus(R.connQueue,S.connection, 4,S.createTime); 
+			 S.msg=rmvMsgConn(conn,S.address); 
+		}
+ end
+/*HTTPNetwork - InvkEndpt*/
+ connector type HTTPReportRefusedConn(HTTPPort R,  endpointPort S)
+	 data ConnStar conn
+	 define R S
+	 on R S
+	 provided (hasConnStatus(R.connQueue, S.connection,3, S.createTime))
+	 down{ //removeFirstConn(R.connQueue,S.connection,-1, S.createTime); 
+	}
+ end
+
+ connector type HTTPReportAcceptedConn(HTTPPort R,  endpointPort S)
+	 data ConnStar conn
+	 define R S
+	 on R S
+	 provided (hasConnStatus(R.connQueue, S.connection,2,S.createTime))
+	 down{ conn = getFirstConnStatus(R.connQueue, S.connection,2,S.createTime); setConnStatus(conn, 4); }
+ end
+
+
+connector type tickConn4(aPort S1, aPort S2,aPort S3, aPort S4)
+export port aPort exp()
+define S1' S2' S3' S4'
+end
+
+
+connector type tickConn6(aPort S1, aPort S2,aPort S3, aPort S4, aPort S5, aPort S6)
+export port aPort exp()
+define S1' S2' S3' S4' S5' S6'
+end
+
+connector type tickConnN4(aPort S1, aPort S2,aPort S3, aPort S4)
+define S1' S2' S3' S4'
+end
+
+connector type tickConn2(aPort S1, aPort S2)
+export port aPort exp()
+define S1' S2'
+end
+
+connector type tickConnN2(aPort S1, aPort S2, aPort S3)
+define S1' S2' S3'
+end
+
+connector type Mono(aPort S)
+define S
+end
+
+connector type MonoEndpointRw(endpointRwPort S)
+define S
+end
+
+/* ************ REST specific ************** */
+
+connector type sndToCacheConn(cachePort S1, dataPort S2)
+define S1 S2
+on S1 S2
+down{ 	S2.cacheAction = S1.cacheAction; S2.url = S1.url; S2.item = S1.cached;}
+end
+
+connector type getFromCacheConn(cachePort S1, dataPort S2)
+define S1 S2
+on S1 S2
+down{ 	S1.cached = S2.item; }
+end
+
+
+/*********** AppServer_s *********************/
+compound type AppServer_s(int id)
+
+	component Disptch DS1(1,1), DS2(1,2)
+	component task_s_get_items AC1(1), AC2(2)
+	component task_s_post_cart AC3(3), AC4(4)
+	component Listnr MBC1(1)
+	component Cache CA(1)
+	component DataResource D()
+/* REST specific */
+connector sndToCacheConn DS1CAsnd(DS1.reqCache, CA.get_query)
+connector sndToCacheConn DS2CAsnd(DS2.reqCache, CA.get_query)
+connector getFromCacheConn DS1CAget(DS1.respCache, CA.snd_resp)
+connector getFromCacheConn DS2CAget(DS2.respCache, CA.snd_resp)
+
+connector queryDataConn AC1queryDataConn(AC1.sndQry, D.query)
+connector resultDataConn AC1resultDataConn(D.result, AC1.getRslt)
+connector queryDataConn AC2queryDataConn(AC2.sndQry, D.query)
+connector resultDataConn AC2resultDataConn(D.result, AC2.getRslt)
+connector queryDataConn AC3queryDataConn(AC3.sndQry, D.query)
+connector resultDataConn AC3resultDataConn(D.result, AC3.getRslt)
+connector queryDataConn AC4queryDataConn(AC4.sndQry, D.query)
+connector resultDataConn AC4resultDataConn(D.result, AC4.getRslt)
+
+
+connector taskInReqConn AC1DS1inReq1(DS1.delivReq, AC1.inReq)
+connector taskOutRespConn AC1DS1outResp1(AC1.outResp, DS1.prepResp)
+connector taskInReqConn AC2DS1inReq1(DS1.delivReq, AC2.inReq)
+connector taskOutRespConn AC2DS1outResp1(AC2.outResp, DS1.prepResp)
+connector taskInReqConn AC1DS2inReq1(DS2.delivReq, AC1.inReq)
+connector taskOutRespConn AC1DS2outResp1(AC1.outResp, DS2.prepResp)
+connector taskInReqConn AC2DS2inReq1(DS2.delivReq, AC2.inReq)
+connector taskOutRespConn AC2DS2outResp1(AC2.outResp, DS2.prepResp)
+
+connector taskInReqConn AC3DS1inReq1(DS1.delivReq, AC3.inReq)
+connector taskOutRespConn AC3DS1outResp1(AC3.outResp, DS1.prepResp)
+connector taskInReqConn AC4DS1inReq1(DS1.delivReq, AC4.inReq)
+connector taskOutRespConn AC4DS1outResp1(AC4.outResp, DS1.prepResp)
+connector taskInReqConn AC3DS2inReq1(DS2.delivReq, AC3.inReq)
+connector taskOutRespConn AC3DS2outResp1(AC3.outResp, DS2.prepResp)
+connector taskInReqConn AC4DS2inReq1(DS2.delivReq, AC4.inReq)
+connector taskOutRespConn AC4DS2outResp1(AC4.outResp, DS2.prepResp)
+connector disptchAcceptConn initializeDS1(MBC1.disptch, DS1.init)
+connector disptchAcceptConn initializeDS2(MBC1.disptch, DS2.init)
+
+
+/* timeout, tick < rcv *** START*/
+connector tickConn2 ticktock(DS1.tick, DS2.tick)
+
+export port ticktock.exp as tick
+export port MBC1.accept as accept
+export port MBC1.reject as reject
+export port DS1.rcvReq,DS2.rcvReq as rcvReq
+export port DS1.sndResp,DS2.sndResp as sndResp
+
+
+end
+
+
+
+
+/*********** AppServer_c *********************/
+compound type AppServer_c(int id)
+
+	component InvcEndpt IE1(1), IE2(2)
+	component task_c ST1(1)//, ST2(2)
+	component Cache CA(1)
+
+/* REST specific */
+connector sndToCacheConn IE1CAsnd(IE1.reqCache, CA.get_query)
+connector sndToCacheConn IE2CAsnd(IE2.reqCache, CA.get_query)
+connector getFromCacheConn IE1CAget(IE1.respCache, CA.snd_resp)
+connector getFromCacheConn IE2CAget(IE2.respCache, CA.snd_resp)
+
+connector tickConn2 ticktock(IE1.tick, IE2.tick)
+
+connector taskOutReqConn ST1IE2outReq1(ST1.outReq, IE2.prepReq)
+connector taskInRespConn ST1IE2inResp1(IE2.delivResp, ST1.inResp)
+connector taskOutReqConn ST1IE1outReq1(ST1.outReq, IE1.prepReq)
+connector taskInRespConn ST1IE1inResp1(IE1.delivResp, ST1.inResp)
+//connector taskOutReqConn ST2IE2outReq1(ST2.outReq, IE2.prepReq)
+//connector taskInRespConn ST2IE2inResp1(IE2.delivResp, ST2.inResp)
+//connector taskOutReqConn ST2IE1outReq1(ST2.outReq, IE1.prepReq)
+//connector taskInRespConn ST2IE1inResp1(IE1.delivResp, ST2.inResp)
+
+export port ticktock.exp as tick
+export port IE2.connect,IE1.connect as connect
+export port IE2.connectionAccepted,IE1.connectionAccepted as connectionAccepted
+export port IE2.connectionRefused,IE1.connectionRefused as connectionRefused
+export port IE2.sndReq,IE1.sndReq as sndReq
+export port IE2.rcvResp,IE1.rcvResp as rcvResp
+export port IE2.closeConnection,IE1.closeConnection as closeConnection
+
+end
+
+connector type aPortMono(aPort S)
+define S
+end 
+
+/*************************** CLIENT ******** END ******************/
+compound type SystemProcess()
+
+	///********** components ***************/
+	component AppServer_s AS1(1)
+	component AppServer_c AS2(2)
+	component AppServer_c AS3(3)
+	component HTTPnetwork HN1(10)
+
+	connector tickConnN2 ticks(AS1.tick, AS2.tick, AS3.tick) /* clock ticks */
+
+	connector HTTPRequestServerConn IEconnects1(AS2.connect, HN1.initConnection)
+	connector HTTPRequestServerConn IEconnects2(AS3.connect, HN1.initConnection)//2nd client
+
+	connector HTTPReachConn searchServer1(HN1.reachServer, AS1.accept) // MBC1 is searched  
+	connector HTTPRejectConn serverOverloaded1(HN1.reachServer, AS1.reject) // MBC1 is searched 
+        connector HTTPNoReachConn noServer(HN1.reachServer)
+
+	connector HTTPReportAcceptedConn notifyAccepted1(HN1.httpEvent, AS2.connectionAccepted)
+	connector HTTPReportAcceptedConn notifyAccepted2(HN1.httpEvent, AS3.connectionAccepted)//2nd client
+	connector HTTPReportRefusedConn notifyRefused1(HN1.httpEvent, AS2.connectionRefused)
+	connector HTTPReportRefusedConn notifyRefused2(HN1.httpEvent, AS3.connectionRefused)//2nd client
+
+	connector HTTPwriteConn AS2sndReq1(AS2.sndReq, HN1.httpEvent)
+	connector HTTPreadConn AS2rcvResp1(HN1.httpEvent, AS2.rcvResp)  
+
+	connector HTTPwriteConn AS3sndReq1(AS3.sndReq, HN1.httpEvent)
+	connector HTTPreadConn AS3rcvResp1(HN1.httpEvent, AS3.rcvResp)//2nd client
+
+	connector HTTPreadConn AS1rcvReq1(HN1.httpEvent, AS1.rcvReq) 
+	connector HTTPwriteConn AS1sndResp1(AS1.sndResp, HN1.httpEvent)
+
+	connector HTTPcloseConn IEcloseConn1(AS2.closeConnection,HN1.httpEvent)
+	connector HTTPcloseConn IEcloseConn2(AS3.closeConnection,HN1.httpEvent)//2nd client
+
+priority scheduler1 noServer:* < searchServer1:*
+
+priority rcvReqBeftickAS11 ticks:AS2.tick, AS1.tick, AS3.tick < AS1rcvReq1:*
+priority rcvReqBeftickAS12 ticks:AS2.tick, AS1.tick < AS1rcvReq1:*
+priority rcvReqBeftickAS13 ticks:AS1.tick, AS3.tick < AS1rcvReq1:*
+priority rcvReqBeftickAS14 ticks:AS1.tick < AS1rcvReq1:*
+
+priority rcvRespBeftickAS21 ticks:AS2.tick, AS1.tick, AS3.tick < AS2rcvResp1:*
+priority rcvRespBeftickAS22 ticks:AS2.tick, AS1.tick < AS2rcvResp1:*
+priority rcvRespBeftickAS23 ticks:AS2.tick, AS3.tick < AS2rcvResp1:*
+priority rcvRespBeftickAS24 ticks:AS2.tick <  AS2rcvResp1:*
+
+priority rcvRespBeftickAS31 ticks:AS2.tick, AS1.tick, AS3.tick < AS3rcvResp1:*
+priority rcvRespBeftickAS32 ticks:AS3.tick, AS1.tick < AS3rcvResp1:*
+priority rcvRespBeftickAS33 ticks:AS2.tick, AS3.tick < AS3rcvResp1:*
+priority rcvRespBeftickAS34 ticks:AS3.tick < AS3rcvResp1:*
+
+priority sndRespBeftickAS11 ticks:AS2.tick, AS1.tick, AS3.tick < AS1sndResp1:*
+priority sndRespBeftickAS12 ticks:AS2.tick, AS1.tick < AS1sndResp1:*
+priority sndRespBeftickAS13 ticks:AS1.tick, AS3.tick < AS1sndResp1:*
+priority sndRespBeftickAS14 ticks:AS1.tick < AS1sndResp1:*
+
+end
+
+end
+
+
+
