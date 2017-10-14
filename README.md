@@ -3,6 +3,7 @@
 A BIP model developed for the needs of an academic publication titled "Correct by Construction Web Service Architecture" (link: http://depend.csd.auth.gr/publications.php), in collaboration with the DSG group of the Department of Informatics, Aristotle University of Thessaloniki.
 
 It pertains to a RESTful client-server Web Service architecture for a Shopping Cart. The Web Service provides the following operations:
+
 a) GET availItems, for getting the available items.
  	- The request contains a list of available items.
 	
