@@ -5,6 +5,7 @@ A BIP model developed for the needs of an academic publication titled "Correct b
 In order to compile an executable for the BIP model from BIP source code, you must fullfil the following prerequisites: 
 
 1)OS: LINUX (tested on an Ubuntu 12.04 x64 machine)
+
 2)The new versions of the BIP compiler + engine (link: http://www-verimag.imag.fr/New-BIP-tools.html) 
 
 Then you have to follow the following steps: 
